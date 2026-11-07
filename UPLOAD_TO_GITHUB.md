@@ -35,13 +35,11 @@ Do not overwrite or repurpose an existing repository.
 Then verify the remote URL and publish `main`:
 
 ```powershell
-git remote add origin https://github.com/<YOUR_GITHUB_USERNAME>/UPIGuard.git
+git remote add origin https://github.com/aryannn45/UPIGuard.git
 git remote -v
 git push -u origin main
 ```
-
-Replace `<YOUR_GITHUB_USERNAME>` with the account name shown in your GitHub
-profile. GitHub may ask you to authenticate through the browser or Git
-Credential Manager.
+GitHub may ask you to authenticate through the browser or Git Credential
+Manager.
 
 Keep the upstream MIT `LICENSE` and `NOTICE.md` attribution in the repository.
