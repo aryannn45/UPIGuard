@@ -1,0 +1,60 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.env
+*.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+.tox/
+.nox/
+.ruff_cache/
+
+# Generated ML artifacts and streaming checkpoints
+model_build/fraud_detection_model.pkl
+model_build/metrics.json
+model_build/.training.lock
+**/checkpoints/
+**/checkpoint/
+data_processor/.ivy2/
+*.checkpoint
+spark-warehouse/
+.sparkStaging/
+
+# Local Docker data
+docker-volumes/
+**/docker-volumes/
+
+# Local databases, logs and editor files
+*.log
+*.sqlite
+*.db
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Docker / OS artifacts
+*.tar
+*.tar.gz

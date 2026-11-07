@@ -1,0 +1,10 @@
+apiVersion: 1
+providers:
+  - name: UPIGuard
+    orgId: 1
+    folder: UPIGuard
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

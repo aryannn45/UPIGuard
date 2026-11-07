@@ -1,0 +1,1 @@
+Take a screenshot of your actual UPIGuard Grafana dashboard and add it here as `upiguard-dashboard.png`. Do not use the upstream reference dashboard image as if it were the customized UPIGuard dashboard.

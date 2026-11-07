@@ -1,0 +1,217 @@
+name: upiguard-local-test
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    hostname: zookeeper
+    container_name: upiguard-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2182:2181"
+    restart: unless-stopped
+
+  broker:
+    image: confluentinc/cp-server:7.5.0
+    hostname: broker
+    container_name: upiguard-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9093:9092"
+      - "9102:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CONFLUENT_SUPPORT_CUSTOMER_ID: anonymous
+    healthcheck:
+      test: ["CMD-SHELL", "cub kafka-ready -b localhost:9092 1 20"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  producer:
+    build:
+      context: ./data_producer
+      dockerfile: Dockerfile
+      args:
+        PRODUCER_SCRIPT: normal_transaction_producer.py
+    container_name: upiguard-normal-producer
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: broker:29092
+      KAFKA_TOPIC: raw_transactions
+    restart: unless-stopped
+
+  hacker-producer:
+    build:
+      context: ./data_producer
+      dockerfile: Dockerfile
+      args:
+        PRODUCER_SCRIPT: hacker_transaction_producer.py
+    container_name: upiguard-suspicious-producer
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: broker:29092
+      KAFKA_TOPIC: raw_transactions
+    restart: unless-stopped
+
+  spark-master:
+    build:
+      context: ./data_processor
+      dockerfile: Dockerfile.spark
+    container_name: upiguard-spark-master
+    environment:
+      HOME: /tmp
+      USER: spark
+      HADOOP_USER_NAME: spark
+    ports:
+      - "8083:8080"
+      - "7078:7077"
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "0.0.0.0", "--port", "7077", "--webui-port", "8080"]
+    restart: unless-stopped
+
+  spark-worker:
+    build:
+      context: ./data_processor
+      dockerfile: Dockerfile.spark
+    container_name: upiguard-spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      HOME: /tmp
+      USER: spark
+      HADOOP_USER_NAME: spark
+    ports:
+      - "8084:8081"
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077", "--cores", "1", "--memory", "1G", "--webui-port", "8081"]
+    restart: unless-stopped
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: upiguard-timescaledb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fraud_detection}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Create a .env file from .env.example and set POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./monitoring/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-fraud_detection}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  model-trainer:
+    build:
+      context: ./model_build
+      dockerfile: Dockerfile
+    container_name: upiguard-model-trainer
+    volumes:
+      - ./model_build:/app
+    command: ["python", "ml_model.py"]
+    restart: "no"
+
+  spark-streaming:
+    build:
+      context: ./data_processor
+      dockerfile: Dockerfile.spark
+    container_name: upiguard-spark-streaming
+    user: "0:0"
+    depends_on:
+      broker:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      model-trainer:
+        condition: service_completed_successfully
+    environment:
+      HOME: /tmp
+      USER: spark
+      HADOOP_USER_NAME: spark
+      KAFKA_BROKERS: broker:29092
+      KAFKA_TOPIC: raw_transactions
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-fraud_detection}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Create a .env file from .env.example and set POSTGRES_PASSWORD}
+      MODEL_PATH: /opt/upiguard/model_build/fraud_detection_model.pkl
+      CHECKPOINT_LOCATION: /tmp/upiguard-checkpoints/fraud-stream
+      SPARK_TRIGGER_INTERVAL: 5 seconds
+      MAX_OFFSETS_PER_TRIGGER: 500
+    ports:
+      - "4041:4040"
+    volumes:
+      - ./data_processor:/opt/upiguard/data_processor:ro
+      - ./model_build:/opt/upiguard/model_build:ro
+      - spark_checkpoints:/tmp/upiguard-checkpoints
+    working_dir: /opt/upiguard/data_processor
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        mkdir -p /tmp/.ivy2 /tmp/upiguard-checkpoints
+        /opt/spark/bin/spark-submit \
+          --master spark://spark-master:7077 \
+          --deploy-mode client \
+          --conf spark.driver.host=spark-streaming \
+          --conf spark.driver.bindAddress=0.0.0.0 \
+          --conf spark.driver.port=7078 \
+          --conf spark.blockManager.port=7079 \
+          --conf spark.jars.ivy=/tmp/.ivy2 \
+          --conf spark.sql.shuffle.partitions=2 \
+          --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.2 \
+          fraud_detector.py
+    restart: unless-stopped
+
+  grafana:
+    build:
+      context: ./monitoring/grafana
+      dockerfile: Dockerfile
+    container_name: upiguard-grafana
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Create a .env file from .env.example and set GRAFANA_ADMIN_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-fraud_detection}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Create a .env file from .env.example and set POSTGRES_PASSWORD}
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
+volumes:
+  timescale_data:
+  spark_checkpoints:
+  grafana_data:

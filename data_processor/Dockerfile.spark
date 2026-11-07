@@ -1,0 +1,18 @@
+FROM apache/spark:3.5.2-scala2.12-java17-python3-ubuntu
+
+USER root
+RUN python3 -m pip install --no-cache-dir \
+    numpy==1.26.4 \
+    pandas==2.2.3 \
+    scikit-learn==1.5.2 \
+    joblib==1.4.2 \
+    psycopg2-binary==2.9.10
+
+ENV HOME=/tmp \
+    USER=spark \
+    HADOOP_USER_NAME=spark \
+    PYTHONUNBUFFERED=1 \
+    PYSPARK_PYTHON=python3 \
+    PYSPARK_DRIVER_PYTHON=python3
+
+USER spark
